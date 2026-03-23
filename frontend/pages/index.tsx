@@ -82,19 +82,7 @@ export default function Classify() {
   };
 
   return (
-    <Layout title="FlavorSnap - AI Food Classification" description="Instantly identify food with AI-powered image recognition">
-      
-      {/* --- HERO SECTION (Issue #24 Fix) --- */}
-      <div className="w-full flex justify-center pt-4 sm:pt-6 px-4 sm:px-6">
-        <div className="relative w-full max-w-[500px] h-[200px] sm:h-[300px] overflow-hidden rounded-2xl shadow-lg border border-gray-200 dark:border-gray-800">
-          <Image 
-            src="/images/hero_img.png" 
-            alt="FlavorSnap Hero"
-            fill
-            priority
-            className="object-cover"
-          />
-        </div>
+
       </div>
       {/* ------------------------------------ */}
 

@@ -1,75 +1,4 @@
-import os
-import time
-import uuid
-import base64
-import io
-import torch
-import torchvision.transforms as transforms
-from torchvision import models
-from PIL import Image
-from functools import wraps
-from datetime import datetime, timezone
-from typing import Dict, Any, Optional
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
-from marshmallow import Schema, fields, validate
-from monitoring import MonitoringMiddleware, track_inference, update_model_accuracy
-from swagger_setup import setup_swagger
-from category_routes import category_bp
-from xai_routes import xai_bp, initialize_explainer
-from social_routes import social_bp
 
-# Attempt to import custom logger, fallback to default if missing
-try:
-    from logger_config import logger
-except ImportError:
-    import logging
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger(__name__)
-
-app = Flask(__name__)
-CORS(app)
-
-# Initialize monitoring
-monitoring = MonitoringMiddleware(app)
-
-# Initialize Swagger UI
-setup_swagger(app)
-
-# Register category management blueprint
-app.register_blueprint(category_bp)
-
-# Register XAI blueprint
-app.register_blueprint(xai_bp)
-
-# Register social sharing blueprint
-app.register_blueprint(social_bp)
-
-# --- ML MODEL SETUP ---
-# Path logic: model.pth is in the parent directory of ml-model-api/
-MODEL_PATH = os.path.join(os.getcwd(), '..', 'model.pth')
-CLASSES_PATH = os.path.join(os.getcwd(), '..', 'food_classes.txt')
-
-def load_ml_components():
-    # 1. Load Labels
-    with open(CLASSES_PATH, 'r') as f:
-        labels = [line.strip() for line in f if line.strip()]
-    
-    # 2. Initialize ResNet18
-    model = models.resnet18()
-    model.fc = torch.nn.Linear(model.fc.in_features, len(labels))
-    
-    # 3. Load Weights
-    if os.path.exists(MODEL_PATH):
-        model.load_state_dict(torch.load(MODEL_PATH, map_location='cpu'))
-        logger.info(f"Model loaded successfully from {MODEL_PATH}")
-    else:
-        logger.warning(f"Model file not found at {MODEL_PATH}. Using untrained weights.")
-    
-    model.eval()
-    return model, labels
 
 # Load once on startup
 ML_MODEL, FOOD_LABELS = load_ml_components()
@@ -169,6 +98,62 @@ def health_check():
         'timestamp': time.time()
     })
 
+@app.route('/analytics/usage', methods=['GET'])
+def get_usage_stats():
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    data = analytics.get_usage_stats(start_date, end_date)
+    return jsonify(data)
+
+@app.route('/analytics/performance', methods=['GET'])
+def get_model_performance():
+    data = analytics.get_model_performance()
+    return jsonify(data)
+
+@app.route('/analytics/engagement', methods=['GET'])
+def get_user_engagement():
+    data = analytics.get_user_engagement()
+    return jsonify(data)
+
+@app.route('/analytics/activity', methods=['GET'])
+def get_real_time_activity():
+    data = analytics.get_real_time_activity()
+    return jsonify(data)
+
+@app.route('/analytics/stats', methods=['GET'])
+def get_stats_cards():
+    data = analytics.get_stats_cards()
+    return jsonify(data)
+
+@app.route('/analytics/export', methods=['GET'])
+def export_analytics():
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    data = analytics.export_data(start_date, end_date)
+    return jsonify(data)
+
+@app.route('/analytics', methods=['GET'])
+def get_all_analytics():
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    
+    data = {
+        'usageStats': analytics.get_usage_stats(start_date, end_date),
+        'modelPerformance': analytics.get_model_performance(),
+        'userEngagement': analytics.get_user_engagement(),
+        'statsCards': analytics.get_stats_cards(),
+        'realTimeActivity': analytics.get_real_time_activity()
+    }
+    return jsonify(data)
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({
+        'status': 'healthy',
+        'model_loaded': True,
+        'version': '1.0.0',
+        'analytics_enabled': True
+    })
+
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8000))
-    app.run(host='0.0.0.0', port=port)
+
