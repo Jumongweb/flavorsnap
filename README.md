@@ -112,12 +112,12 @@ flavorsnap/
 - **Framework**: PyTorch
 - **Architecture**: ResNet18 (ImageNet pretrained)
 - **Image Processing**: Pillow & torchvision
-- **Model Serving**: Flask
+- **Model Serving**: FastAPI
 - **Inference**: CPU-optimized for deployment
 
 ### ⚙️ Backend
 
-- **API**: Flask with RESTful endpoints
+- **API**: FastAPI with RESTful endpoints
 - **Language**: Python 3.8+
 - **File Storage**: Local filesystem (configurable)
 - **Image Processing**: Pillow, OpenCV
@@ -450,6 +450,87 @@ Follow [Conventional Commits](https://conventionalcommits.org/):
 ## 📝 API Documentation
 
 ### Endpoints
+
+### Current REST API
+
+FlavorSnap now exposes a FastAPI-based REST API with generated OpenAPI documentation.
+
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
+- OpenAPI schema: `http://localhost:8000/openapi.json`
+
+#### POST /api/v1/classify
+
+Classify an uploaded food image with multipart form data.
+
+**Form fields:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `image` | file | yes | JPEG, PNG, or WebP image |
+| `resize` | int | no | Square resize target before inference. Default: `224` |
+| `center_crop` | bool | no | Apply center crop after resize. Default: `true` |
+| `normalize` | bool | no | Apply ImageNet normalization. Default: `true` |
+| `top_k` | int | no | Number of ranked predictions to return. Default: `3` |
+
+**Request:**
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/classify" \
+  -F "image=@/path/to/food.jpg" \
+  -F "resize=256" \
+  -F "center_crop=true" \
+  -F "normalize=true" \
+  -F "top_k=3"
+```
+
+**Response:**
+
+```json
+{
+  "prediction": "Moi Moi",
+  "confidence": 0.91,
+  "predictions": [
+    { "label": "Moi Moi", "confidence": 0.91 },
+    { "label": "Akara", "confidence": 0.06 },
+    { "label": "Bread", "confidence": 0.03 }
+  ],
+  "preprocessing": {
+    "resize": 256,
+    "center_crop": true,
+    "normalize": true,
+    "top_k": 3
+  },
+  "processing_time_ms": 18.247,
+  "filename": "food.jpg",
+  "request_id": "4b3709df-4d1f-4cad-95f7-9e86b629f470"
+}
+```
+
+**Error codes:**
+
+- `400`: empty upload or invalid image payload
+- `413`: file exceeds configured upload size
+- `415`: unsupported content type
+- `429`: rate limit exceeded
+- `500`: model loading or inference failure
+
+#### GET /api/v1/health
+
+Check API health and model readiness.
+
+**Response:**
+
+```json
+{
+  "status": "ok",
+  "model_loaded": true,
+  "classes": ["Akara", "Bread", "Egusi", "Moi Moi", "Rice and Stew", "Yam"],
+  "startup_error": null
+}
+```
+
+### Legacy notes
 
 #### POST /predict
 
