@@ -1,5 +1,6 @@
 from src.ui import theme_manager, ImageViewer, LoadingUI, SkeletonCard
 from src.core import ProgressClassifier
+from src.utils.memory_manager import MemoryManager
 import panel as pn
 import torch
 from PIL import Image
