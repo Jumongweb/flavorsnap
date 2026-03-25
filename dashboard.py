@@ -12,17 +12,21 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
 from src.ui.preprocessing_controls import PreprocessingControls
+from src.ui.confidence_chart import create_confidence_chart
 from src.core.image_enhancer import ImageEnhancer
+from src.core.classifier import FlavorSnapClassifier
 
-pn.extension('css')
+# Configure Panel extensions with custom CSS and JS
+pn.extension('css', js_files={
+    'charts': ['static/js/charts.js']
+}, css_files={
+    'charts': ['static/css/charts.css']
+})
 
-# Load model
-model_path = 'models/best_model.pth'
-class_names = ['Akara', 'Bread', 'Egusi', 'Moi Moi', 'Rice and Stew', 'Yam']
-model = models.resnet18(weights='IMAGENET1K_V1')
-model.fc = torch.nn.Linear(model.fc.in_features, len(class_names))
-model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
-model.eval()
+# Load model using the enhanced classifier
+classifier = FlavorSnapClassifier()
+model = classifier.model
+class_names = classifier.class_names
 
 # Transforms
 transform = transforms.Compose([
@@ -43,6 +47,10 @@ output = pn.pane.Markdown("Upload an image of food 🍲")
 image_preview = pn.pane.Image(width=300, height=300, visible=False)
 processed_preview = pn.pane.Image(width=300, height=300, visible=False)
 spinner = pn.indicators.LoadingSpinner(value=False, width=50)
+
+# Create confidence chart component
+confidence_chart = create_confidence_chart(animate=True)
+confidence_chart_component = confidence_chart.create_layout()
 
 # Preprocessing controls
 preprocessing_controls = PreprocessingControls()
@@ -108,37 +116,54 @@ def classify(event=None):
         # Use processed image for classification
         image_to_classify = processed_image
 
-        # Transform and predict
-        img_tensor = transform(image_to_classify).unsqueeze(0)
-        with torch.no_grad():
-            outputs = model(img_tensor)
-            _, pred = torch.max(outputs, 1)
-            predicted_class = class_names[pred.item()]
+        # Get preprocessing parameters
+        preprocessing_params = preprocessing_controls.get_enhancement_params()
+
+        # Use enhanced classifier for detailed results
+        result = classifier.classify_image(image_to_classify, preprocessing_params)
+        
+        # Extract results
+        predicted_class = result['predicted_class']
+        confidence_score = result['confidence']
+        all_probabilities = result['all_probabilities']
+        
+        # Update confidence chart with all probabilities
+        confidence_chart.update_predictions(all_probabilities, predicted_class)
 
         # Save processed image
         save_image(image_to_classify, predicted_class)
         
-        # Get preprocessing parameters
-        params = preprocessing_controls.get_enhancement_params()
+        # Create enhanced result message
+        confidence_percentage = confidence_score * 100
+        entropy = result['metadata']['entropy']
+        avg_confidence = result['metadata']['average_confidence']
         
-        # Create result message with preprocessing info
         result_message = f"""
 ✅ **Classification Result: {predicted_class}**
 
+### 🎯 Confidence Scores
+- **Top Prediction:** {predicted_class} ({confidence_percentage:.1f}%)
+- **Model Uncertainty (Entropy):** {entropy:.3f}
+- **Average Confidence:** {avg_confidence:.1f}%
+
 ### 📊 Preprocessing Parameters Applied:
-- **Brightness**: {params['brightness']:.1f}
-- **Contrast**: {params['contrast']:.1f}
-- **Rotation**: {params['rotation']:.0f}°
-- **Aspect Ratio**: {params.get('aspect_ratio', 'Original')}
-- **Crop**: {params.get('crop_box', 'None')}
+- **Brightness**: {preprocessing_params['brightness']:.1f}
+- **Contrast**: {preprocessing_params['contrast']:.1f}
+- **Rotation**: {preprocessing_params['rotation']:.0f}°
+- **Aspect Ratio**: {preprocessing_params.get('aspect_ratio', 'Original')}
+- **Crop**: {preprocessing_params.get('crop_box', 'None')}
 
 💾 Processed image saved to training data!
+
+📈 **View the confidence chart below** to see probabilities for all food classes.
         """
         
         output.object = result_message
         
     except Exception as e:
         output.object = f"❌ Error: {str(e)}"
+        # Reset chart on error
+        confidence_chart.reset()
     finally:
         spinner.value = False
 
@@ -174,13 +199,19 @@ classification_section = pn.Column(
     output,
 )
 
+confidence_section = pn.Column(
+    "## 📈 Confidence Analysis",
+    confidence_chart_component,
+)
+
 app = pn.Row(
     pn.Column(
         upload_section,
         preview_section,
         classification_section,
+        confidence_section,
         sizing_mode='stretch_width',
-        max_width=600,
+        max_width=800,
     ),
     controls_section,
     sizing_mode='stretch_width',

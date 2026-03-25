@@ -1,9 +1,9 @@
-<<<<<<< HEAD
 """
 FlavorSnap Image Classifier with Preprocessing Support
 
 This module handles image classification with preprocessing capabilities.
 It integrates with the image enhancer to apply preprocessing before classification.
+Enhanced to return all class probabilities for confidence visualization.
 """
 
 import torch
@@ -133,7 +133,7 @@ class FlavorSnapClassifier:
             for i, class_name in enumerate(self.class_names):
                 all_probabilities[class_name] = probabilities[0][i].item()
             
-            # Prepare result
+            # Prepare result with all required data for confidence chart
             result = {
                 'predicted_class': predicted_class,
                 'confidence': confidence_score,
@@ -143,6 +143,15 @@ class FlavorSnapClassifier:
                 'image_info': {
                     'size': processed_image.size,
                     'mode': processed_image.mode
+                },
+                # Additional metadata for confidence visualization
+                'metadata': {
+                    'num_classes': len(self.class_names),
+                    'class_names': self.class_names,
+                    'entropy': self._calculate_entropy(all_probabilities),
+                    'top_confidence': confidence_score,
+                    'average_confidence': np.mean(list(all_probabilities.values())),
+                    'confidence_distribution': self._get_confidence_distribution(all_probabilities)
                 }
             }
             
@@ -152,6 +161,43 @@ class FlavorSnapClassifier:
         except Exception as e:
             logger.error(f"Error during classification: {e}")
             raise
+    
+    def _calculate_entropy(self, probabilities: Dict[str, float]) -> float:
+        """
+        Calculate the entropy of the probability distribution.
+        
+        Args:
+            probabilities: Dictionary of class probabilities
+            
+        Returns:
+            Entropy value
+        """
+        probs = np.array(list(probabilities.values()))
+        # Avoid log(0)
+        probs = probs[probs > 0]
+        return -np.sum(probs * np.log2(probs)) if len(probs) > 0 else 0.0
+    
+    def _get_confidence_distribution(self, probabilities: Dict[str, float]) -> Dict[str, int]:
+        """
+        Get the distribution of confidence levels.
+        
+        Args:
+            probabilities: Dictionary of class probabilities
+            
+        Returns:
+            Dictionary with counts of high, medium, and low confidence predictions
+        """
+        distribution = {'high': 0, 'medium': 0, 'low': 0}
+        
+        for prob in probabilities.values():
+            if prob > 0.8:
+                distribution['high'] += 1
+            elif prob >= 0.6:
+                distribution['medium'] += 1
+            else:
+                distribution['low'] += 1
+        
+        return distribution
     
     def batch_classify(self, images: list, preprocessing_params: Optional[Dict[str, Any]] = None) -> list:
         """
@@ -341,81 +387,47 @@ def get_image_preprocessing_tips(image: Image.Image) -> Dict[str, Any]:
     """
     classifier = FlavorSnapClassifier()
     return classifier.get_preprocessing_recommendations(image)
-=======
-from src.utils.memory_manager import MemoryManager
-import torch
-import torch.nn as nn
-from torchvision import models
-import torchvision.transforms as transforms
-from PIL import Image
-import time
-import io
-import os
-import gc
 
-class ProgressClassifier:
+
+# Legacy compatibility class for ProgressClassifier functionality
+class ProgressClassifier(FlavorSnapClassifier):
     """
     Enhanced Image Classifier with progress tracking and memory management.
+    Inherits from FlavorSnapClassifier and adds progress callbacks.
     """
-    def __init__(self, model_path='models/best_model.pth'):
-        self.model_path = model_path
-        self.class_names = ['Akara', 'Bread', 'Egusi', 'Moi Moi', 'Rice and Stew', 'Yam']
-        self.model = self._load_model()
-        self.transform = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-        ])
-
-    def _load_model(self):
-        # Initial Model Setup
-        model = models.resnet18(weights='IMAGENET1K_V1')
-        model.fc = nn.Linear(model.fc.in_features, len(self.class_names))
-        if os.path.exists(self.model_path):
-            model.load_state_dict(torch.load(self.model_path, map_location=torch.device('cpu')))
-        model.eval()
-        return model
-
-    def cleanup(self):
-        """Standard cleanup for intermediate components."""
-        MemoryManager.cleanup()
-
+    
     def classify_with_progress(self, image_data, progress_callback=None):
         """
         Runs classification with simulated stages and strict memory management.
+        
+        Args:
+            image_data: Raw image data (bytes)
+            progress_callback: Optional callback function for progress updates
+            
+        Returns:
+            Tuple of (predicted_class, processed_image)
         """
         def update(p, msg):
             if progress_callback:
                 progress_callback(p, msg)
-            time.sleep(0.5)
-
+        
         try:
-            # 1. Image Loading (Skeleton Phase)
+            # 1. Image Loading
             update(5, "🖼️ Decoding image data...")
             image = Image.open(io.BytesIO(image_data)).convert('RGB')
             update(15, "✨ Normalizing pixels...")
 
             # 2. Pre-processing
             update(30, "📐 Resizing to 224x224...")
-            img_tensor = self.transform(image).unsqueeze(0)
-            update(45, "🧠 Preparing neural network tensors...")
-
-            # 3. Model Inference (Main Process)
-            start_time = time.time()
+            
+            # 3. Model Inference
             update(60, "🔍 Deep-learning analysis in progress...")
             
-            with torch.no_grad():
-                outputs = self.model(img_tensor)
-                _, pred = torch.max(outputs, 1)
-                predicted_class = self.class_names[pred.item()]
+            # Use parent class classification method
+            result = self.classify_image(image)
+            predicted_class = result['predicted_class']
             
-            elapsed = time.time() - start_time
             update(85, "📊 Post-processing confidence scores...")
-
-            # Explicitly delete result-heavy tensors
-            del img_tensor
-            del outputs
-
-            # 4. Finalizing
             update(100, f"✅ Done! Found: {predicted_class}")
             
             return predicted_class, image
@@ -423,8 +435,17 @@ class ProgressClassifier:
         except Exception as e:
             raise e
         finally:
-            # Final broad cleanup
+            # Final cleanup
+            import gc
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
->>>>>>> fork/Real-time-image-preprocessing-controls
+
+
+# Memory management utilities
+def cleanup_model_memory():
+    """Clean up GPU memory and perform garbage collection."""
+    import gc
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
