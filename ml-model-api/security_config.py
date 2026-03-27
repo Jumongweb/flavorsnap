@@ -10,6 +10,8 @@ from werkzeug.utils import secure_filename
 import hashlib
 import hmac
 from datetime import datetime, timedelta
+from PIL import Image
+import io
 
 class SecurityConfig:
     """Security configuration class"""
@@ -24,14 +26,19 @@ class SecurityConfig:
     }
     
     # File upload security
-    ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
-    MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB
+    ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
+    MAX_CONTENT_LENGTH = 10 * 1024 * 1024  # 10MB
     ALLOWED_MIME_TYPES = {
         'image/jpeg',
-        'image/png', 
-        'image/gif',
+        'image/png',
         'image/webp'
     }
+    
+    # Image dimension constraints
+    MIN_IMAGE_WIDTH = 100
+    MIN_IMAGE_HEIGHT = 100
+    MAX_IMAGE_WIDTH = 10000  # Prevent memory exhaustion
+    MAX_IMAGE_HEIGHT = 10000
     
     # Input validation patterns
     PATTERNS = {
@@ -93,40 +100,101 @@ class InputValidator:
     
     @staticmethod
     def validate_file_upload(file) -> tuple[bool, Optional[str]]:
-        """Validate uploaded file"""
+        """Validate uploaded file with comprehensive security checks"""
         if not file:
             return False, "No file provided"
         
         if file.filename == '':
             return False, "Empty filename"
         
-        # Validate filename
+        # Validate filename format and extension
         if not InputValidator.validate_filename(file.filename):
-            return False, "Invalid filename"
+            return False, "Invalid filename format or unsupported file extension"
         
         # Validate MIME type
         if file.content_type not in SecurityConfig.ALLOWED_MIME_TYPES:
-            return False, f"Unsupported file type: {file.content_type}"
+            return False, f"Unsupported file type. Allowed types: jpg, png, webp"
         
         # Check file size
         file.seek(0, os.SEEK_END)
         file_size = file.tell()
         file.seek(0)
         
+        if file_size == 0:
+            return False, "File is empty"
+        
         if file_size > SecurityConfig.MAX_CONTENT_LENGTH:
-            return False, f"File too large. Max size: {SecurityConfig.MAX_CONTENT_LENGTH} bytes"
+            max_size_mb = SecurityConfig.MAX_CONTENT_LENGTH / (1024 * 1024)
+            return False, f"File too large. Maximum size: {max_size_mb}MB"
+        
+        # Validate image dimensions and detect malicious files
+        try:
+            file_data = file.read()
+            file.seek(0)  # Reset file pointer
+            
+            # Attempt to open as image (will fail for malicious files)
+            img = Image.open(io.BytesIO(file_data))
+            
+            # Verify image format matches extension
+            img_format = img.format.lower() if img.format else ''
+            allowed_formats = {'jpeg', 'jpg', 'png', 'webp'}
+            if img_format not in allowed_formats:
+                return False, f"Invalid image format. Allowed formats: jpg, png, webp"
+            
+            # Check image dimensions
+            width, height = img.size
+            
+            if width < SecurityConfig.MIN_IMAGE_WIDTH or height < SecurityConfig.MIN_IMAGE_HEIGHT:
+                return False, f"Image too small. Minimum dimensions: {SecurityConfig.MIN_IMAGE_WIDTH}x{SecurityConfig.MIN_IMAGE_HEIGHT}px"
+            
+            if width > SecurityConfig.MAX_IMAGE_WIDTH or height > SecurityConfig.MAX_IMAGE_HEIGHT:
+                return False, f"Image too large. Maximum dimensions: {SecurityConfig.MAX_IMAGE_WIDTH}x{SecurityConfig.MAX_IMAGE_HEIGHT}px"
+            
+            # Verify image can be loaded (detects corrupted/malicious files)
+            img.verify()
+            
+            # Re-open for additional checks after verify()
+            img = Image.open(io.BytesIO(file_data))
+            
+            # Check for suspicious metadata or embedded scripts
+            if hasattr(img, 'info') and img.info:
+                # Check for suspicious keys in metadata
+                suspicious_keys = ['comment', 'software', 'exif']
+                for key in suspicious_keys:
+                    if key in img.info:
+                        value = str(img.info[key]).lower()
+                        if any(pattern in value for pattern in ['<script', 'javascript:', 'data:', 'vbscript:']):
+                            return False, "Suspicious content detected in image metadata"
+            
+        except Exception as e:
+            return False, f"Invalid or corrupted image file: {str(e)}"
         
         return True, None
     
     @staticmethod
     def secure_filename_custom(filename: str) -> str:
-        """Custom secure filename generation"""
+        """Custom secure filename generation with path traversal protection"""
+        # Remove any path components
+        filename = os.path.basename(filename)
+        
         # Use Werkzeug's secure_filename as base
         secure_name = secure_filename(filename)
+        
+        # Additional sanitization: remove any remaining suspicious characters
+        secure_name = re.sub(r'[^\w\s.-]', '', secure_name)
+        
+        # Prevent path traversal attempts
+        if '..' in secure_name or secure_name.startswith('.'):
+            secure_name = secure_name.replace('..', '').lstrip('.')
         
         # Add timestamp to prevent collisions
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         name, ext = os.path.splitext(secure_name)
+        
+        # Ensure extension is lowercase and valid
+        ext = ext.lower()
+        if ext.lstrip('.') not in SecurityConfig.ALLOWED_EXTENSIONS:
+            ext = '.jpg'  # Default to jpg if invalid
         
         return f"{name}_{timestamp}{ext}"
 
