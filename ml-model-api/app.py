@@ -30,6 +30,7 @@ class Config:
     RATE_LIMIT_STORAGE_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379')
     UPLOAD_FOLDER = 'uploads'
     ENV = os.environ.get('FLASK_ENV', 'development')
+    MAX_CONTENT_LENGTH = 10 * 1024 * 1024  # 10MB limit
 
 app.config.from_object(Config)
 
