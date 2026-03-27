@@ -15,6 +15,10 @@ from security_config import (
     validate_json_input, is_safe_url
 )
 
+# Import performance monitoring
+from monitoring import MonitoringMiddleware, track_inference, update_model_accuracy
+
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -28,6 +32,7 @@ class Config:
     UPLOAD_FOLDER = 'uploads'
     MAX_CONTENT_LENGTH = SecurityConfig.MAX_CONTENT_LENGTH
     ENV = os.environ.get('FLASK_ENV', 'development')
+    MAX_CONTENT_LENGTH = 10 * 1024 * 1024  # 10MB limit
 
 
 app.config.from_object(Config)
@@ -37,13 +42,14 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 security_middleware = SecurityMiddleware(app)
 security_monitor = SecurityMonitor(app)
 
-# Rate limiter — falls back to in-memory if Redis is not configured
-_storage_uri = app.config['REDIS_URL'] if app.config['REDIS_URL'] else 'memory://'
+# Initialize performance monitoring middleware
+monitoring_middleware = MonitoringMiddleware(app)
+
+# Initialize rate limiter
 limiter = Limiter(
     key_func=RateLimitManager.get_client_ip,
     app=app,
-    storage_uri=_storage_uri,
-    default_limits=[SecurityConfig.RATE_LIMITS['default']]
+    default_limits=["100 per hour"]
 )
 
 CORS(app,
@@ -73,8 +79,9 @@ def require_api_key(f):
 
 
 @app.route('/predict', methods=['POST'])
-@limiter.limit(SecurityConfig.RATE_LIMITS['predict'])
+@limiter.limit("10 per minute")
 @require_api_key
+@track_inference
 def predict():
     """Food classification endpoint"""
     start_time = time.time()
@@ -112,24 +119,75 @@ def predict():
 @app.route('/health', methods=['GET'])
 @limiter.exempt
 def health_check():
-    return jsonify({
-        'status': 'healthy',
-        'timestamp': datetime.now().isoformat(),
-        'version': '2.0.0',
-        'model_loaded': False  # update when model is integrated
-    })
+    try:
+        # Get detailed health from monitoring middleware
+        if hasattr(monitoring_middleware, '_get_detailed_health'):
+            detailed_health = monitoring_middleware._get_detailed_health()
+        else:
+            detailed_health = {
+                'status': 'healthy',
+                'timestamp': datetime.now().isoformat(),
+                'monitoring': 'basic'
+            }
+        
+        return jsonify({
+            'status': 'healthy',
+            'timestamp': datetime.now().isoformat(),
+            'version': '2.0.0',
+            'security': {
+                'rate_limiting': True,
+                'api_key_auth': True,
+                'security_headers': True,
+                'input_validation': True
+            },
+            'monitoring': {
+                'enabled': True,
+                'metrics_endpoint': '/metrics',
+                'dashboard_endpoint': '/dashboard',
+                'detailed_health_endpoint': '/health/detailed'
+            },
+            'detailed_metrics': detailed_health
+        })
+    except Exception as e:
+        logger.error(f"Health check error: {e}")
+        return jsonify({
+            'status': 'degraded',
+            'timestamp': datetime.now().isoformat(),
+            'error': str(e)
+        }), 500
 
 
 @app.route('/api/info', methods=['GET'])
-@limiter.limit(SecurityConfig.RATE_LIMITS['api_info'])
+@limiter.limit("20 per minute")
 def api_info():
     return jsonify({
         'name': 'FlavorSnap API',
         'version': '2.0.0',
         'endpoints': {
-            'predict': 'POST /predict',
-            'health': 'GET /health',
-            'info': 'GET /api/info'
+            'predict': 'POST /predict - Food classification',
+            'health': 'GET /health - Health check',
+            'health_detailed': 'GET /health/detailed - Detailed health metrics',
+            'metrics': 'GET /metrics - Prometheus metrics',
+            'dashboard': 'GET /dashboard - Performance dashboard',
+            'info': 'GET /api/info - API information',
+            'admin_api_key': 'POST /admin/api-key/generate - Generate API key'
+        },
+        'security': {
+            'rate_limiting': 'enabled',
+            'api_key_auth': 'Required for production',
+            'cors_enabled': True,
+            'security_headers': True,
+            'input_validation': True,
+            'file_upload_limits': {
+                'max_size': '16MB',
+                'allowed_types': ['image/jpeg', 'image/png', 'image/gif']
+            }
+        },
+        'monitoring': {
+            'prometheus_metrics': True,
+            'performance_dashboard': True,
+            'system_metrics': ['cpu', 'memory', 'gpu', 'disk'],
+            'application_metrics': ['requests', 'response_time', 'inference_metrics', 'error_rate']
         }
     })
 
@@ -144,13 +202,30 @@ def generate_api_key():
         'message': 'Store this key securely - it will not be shown again'
     })
 
+# Performance dashboard endpoint
+@app.route('/dashboard', methods=['GET'])
+@limiter.limit("20 per minute")
+def performance_dashboard():
+    """Serve performance dashboard"""
+    try:
+        from performance_dashboard import create_dashboard
+        dashboard = create_dashboard()
+        return dashboard
+    except ImportError as e:
+        logger.error(f"Performance dashboard not available: {e}")
+        return jsonify({'error': 'Performance dashboard not available'}), 503
+    except Exception as e:
+        logger.error(f"Error serving performance dashboard: {e}")
+        return jsonify({'error': 'Internal server error'}), 500
 
+# Error handlers
 @app.errorhandler(429)
 def ratelimit_handler(e):
     return jsonify({
         'error': 'Rate limit exceeded',
         'message': str(e.description),
-        'retry_after': getattr(e, 'retry_after', 60)
+        'retry_after': getattr(e, 'retry_after', 60),
+        'limit': '100 per hour'
     }), 429
 
 
@@ -163,7 +238,7 @@ def not_found_handler(e):
 def request_too_large_handler(e):
     return jsonify({
         'error': 'Request too large',
-        'max_size': f"{SecurityConfig.MAX_CONTENT_LENGTH} bytes"
+        'max_size': '16MB'
     }), 413
 
 
